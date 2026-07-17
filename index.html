@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#0f1f3d">
+    <meta name="description" content="实验室计算器：溶液配制、溶出介质配制与 HPLC 梯度洗脱窗口计算。">
+    <title>实验室计算器</title>
+    <link rel="stylesheet" href="assets/styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+    <header class="app-header">
+      <div class="header-inner">
+        <button class="icon-button back-button" id="back-home" type="button" aria-label="返回功能首页" hidden>
+          <span aria-hidden="true">←</span>
+        </button>
+        <a class="brand" href="#/" aria-label="实验室计算器首页">
+          <span class="brand-mark" aria-hidden="true">LC</span>
+          <span>
+            <strong>实验室计算器</strong>
+            <small id="header-subtitle">让实验计算更清楚、更可复核</small>
+          </span>
+        </a>
+        <div class="header-actions">
+          <button class="text-button" id="help-button" type="button">帮助与边界</button>
+          <button class="icon-button menu-button" id="menu-button" type="button" aria-expanded="false" aria-controls="header-menu" aria-label="打开页面菜单">⋯</button>
+          <div class="header-menu" id="header-menu" hidden></div>
+        </div>
+      </div>
+    </header>
+
+    <div class="status-strip" id="status-strip" hidden>
+      <div class="status-strip-inner">
+        <span class="status-badge neutral" id="save-status">数据保存在当前浏览器</span>
+        <span class="status-badge neutral" id="result-status">尚无计算结果</span>
+        <span class="status-context" id="status-context"></span>
+      </div>
+    </div>
+
+    <main id="main-content" tabindex="-1">
+      <div id="app" aria-live="off"></div>
+    </main>
+
+    <div class="mobile-action-bar" id="mobile-action-bar" hidden></div>
+    <div class="toast-region" id="toast-region" role="status" aria-live="polite" aria-atomic="true"></div>
+    <input id="file-input" type="file" accept=".json,.labrecipe.json,.labhplc.json,application/json" hidden>
+
+    <dialog class="app-dialog" id="app-dialog" aria-labelledby="dialog-title">
+      <form method="dialog">
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow" id="dialog-eyebrow">请确认</p>
+            <h2 id="dialog-title">确认操作</h2>
+          </div>
+          <button class="icon-button" value="cancel" aria-label="关闭对话框">×</button>
+        </div>
+        <div class="dialog-content" id="dialog-content"></div>
+        <div class="dialog-actions" id="dialog-actions">
+          <button class="button secondary" value="cancel">取消</button>
+          <button class="button primary" id="dialog-confirm" value="confirm">确认</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="assets/app.js" defer></script>
+  </body>
+</html>
