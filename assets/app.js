@@ -23,6 +23,7 @@
   const UNIT_TO_ML = { nL: 0.000001, "µL": 0.001, mL: 1, cL: 10, dL: 100, L: 1000 };
   const UNITS = Object.keys(UNIT_TO_ML);
   const PHASE_CODES = ["A", "B", "C", "D"];
+  const APP_VERSION = "1.1.1";
   const CHART_COLORS = ["#2563eb", "#079455", "#b54708", "#d92d20"];
   const WINDOW_COLORS = ["#7c3aed", "#c026d3", "#db2777", "#c2410c", "#0e7490", "#4338ca", "#047857", "#a16207"];
   const STORAGE = {
@@ -256,7 +257,7 @@
     app.innerHTML = `
       <div class="page">
         <section class="hero" aria-labelledby="home-title">
-          <p class="eyebrow" style="color:#9fc5ff">LABORATORY WORKSPACE</p>
+          <p class="eyebrow" style="color:#9fc5ff">LABORATORY WORKSPACE · V${APP_VERSION}</p>
           <h1 id="home-title">把复杂实验计算，整理成可复核的步骤</h1>
           <p>选择任务，按输入顺序完成计算。每项结果都保留状态、依据与专业边界，适合桌面浏览器和实验现场手机查看。</p>
           <div class="hero-meta">
@@ -1407,7 +1408,7 @@
       <div class="card-heading"><div><h2>洗脱窗口汇总</h2><p id="selected-summary-count">已选择 ${hplc.selectedResultIds.length} 个目标物用于下一步初步优化。</p></div></div>
       <div class="analyte-list" id="hplc-summary-list">${summaryCardsHtml()}</div>
       <div class="alert warning" style="margin-top:16px">流动相比例差异不能替代实际色谱分离度；所有结果均需通过标准品与实际系统验证。</div>
-      <div class="button-row desktop-only" style="justify-content:flex-end;margin-top:18px"><button class="button primary" type="button" data-action="go-optimization" ${hplc.results.length ? "" : "disabled"}>生成洗脱窗口汇总</button></div>
+      <div class="button-row" style="justify-content:flex-end;margin-top:18px"><button class="button primary" type="button" data-action="go-optimization" ${hplc.results.length ? "" : "disabled"}>生成洗脱窗口汇总</button></div>
     </section>
   `;
 
