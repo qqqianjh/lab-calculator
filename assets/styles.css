@@ -811,6 +811,7 @@ button:disabled {
 
 .row-title {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 7px;
   min-width: 0;
@@ -819,6 +820,12 @@ button:disabled {
 
 .row-title span:first-child {
   overflow-wrap: anywhere;
+}
+
+.level-tag {
+  border: 1px solid hsl(var(--level-hue) 52% 80%);
+  background: hsl(var(--level-hue) 78% 94%);
+  color: hsl(var(--level-hue) 62% 32%);
 }
 
 .row-meta {
