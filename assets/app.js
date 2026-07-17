@@ -243,7 +243,7 @@
     {
       route: "hplc",
       number: "03",
-      title: "HPLC 梯度洗脱",
+      title: "HPLC梯度程序辅助",
       description: "录入梯度和目标物，估算流动相比例与潜在洗脱窗口。",
       outputs: ["梯度图", "比例", "优化建议"],
     },
@@ -304,7 +304,6 @@
         }
       });
     });
-    focusMain();
   }
 
   const exampleRecipe = () => ({
@@ -440,9 +439,9 @@
         const siblingSum = siblings.reduce((sum, item) => sum + Number(item.ratio || 0), 0);
         const share = isRoot || siblingSum <= 0 ? "" : `${numberText(Number(node.ratio) / siblingSum * 100, 3)}%`;
         return `
-          <div class="recipe-row ${solution.selectedId === node.id ? "selected" : ""}" style="--depth:${depth}" data-node-id="${node.id}">
+          <div class="recipe-row ${solution.selectedId === node.id ? "selected" : ""}" style="--depth:${depth};--level-hue:${(214 + depth * 67) % 360}" data-node-id="${node.id}">
             <div class="row-main">
-              <div class="row-title"><span>${depth ? "↳ " : ""}${e(node.name)}</span>${node.children.length ? `<span class="tag info">中间相</span>` : `<span class="tag success">最终组分</span>`}</div>
+              <div class="row-title"><span>${depth ? "↳ " : ""}${e(node.name)}</span><span class="tag level-tag">第 ${depth + 1} 级</span>${node.children.length ? `<span class="tag info">中间相</span>` : `<span class="tag success">最终组分</span>`}</div>
               <div class="row-meta">${isRoot ? `${node.children.length} 个直属组分` : `比例 ${numberText(node.ratio)}${share ? ` · 同级占比 ${share}` : ""}`}</div>
             </div>
             <span class="tag neutral">${node.children.length ? `${node.children.length} 项` : "叶子"}</span>
@@ -586,7 +585,6 @@
     app.onclick = handleSolutionClick;
     app.oninput = handleSolutionInput;
     app.onchange = handleSolutionChange;
-    focusMain();
   }
 
   async function resetSolution(next) {
@@ -982,7 +980,6 @@
     app.onclick = handleMediaClick;
     app.oninput = handleMediaInput;
     app.onchange = handleMediaChange;
-    focusMain();
   }
 
   function handleMediaClick(event) {
@@ -1508,7 +1505,7 @@
   function renderHplc() {
     localStorage.setItem(STORAGE.recent, "hplc");
     setShell({
-      title: "HPLC 梯度洗脱",
+      title: "HPLC梯度程序辅助",
       save: `草稿已保存 · ${formatTime()}`,
       saveKind: "success",
       result: hplc.stale ? "结果过期 · 待重新确认" : hplc.confirmed ? `已确认 ${hplc.confirmed.version}` : "梯度未确认",
@@ -1541,7 +1538,6 @@
     app.onchange = handleHplcChange;
     if (hplc.step === 3 && hplc.confirmed && !hplc.stale) requestAnimationFrame(() => setupChart("gradient-chart", hplc.points));
     if (hplc.step === 5 && hplc.optimization) requestAnimationFrame(() => setupChart("optimized-chart", hplc.optimization.points, hplc.optimization.windows));
-    focusMain();
   }
 
   function handleHplcMobileAction(event) {
@@ -2069,7 +2065,7 @@
   function exportHplcCsv() {
     if (!hplc.results.length || hplc.stale) return;
     const rows = [
-      ["HPLC梯度洗脱窗口计算结果"],
+      ["HPLC梯度程序辅助计算结果"],
       ["导出时间", new Date().toISOString()],
       ["流动相元数", hplc.phaseCount],
       ["流速(mL/min)", hplc.flowRate],
@@ -2128,6 +2124,7 @@
       renderDissolution();
     } else if (path === "hplc") renderHplc();
     else renderHome();
+    focusMain();
   }
 
   addEventListener("hashchange", route);
