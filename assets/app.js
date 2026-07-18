@@ -23,12 +23,13 @@
   const UNIT_TO_ML = { nL: 0.000001, "µL": 0.001, mL: 1, cL: 10, dL: 100, L: 1000 };
   const UNITS = Object.keys(UNIT_TO_ML);
   const PHASE_CODES = ["A", "B", "C", "D"];
-  const APP_VERSION = "1.1.1";
+  const APP_VERSION = "1.2.0";
   const CHART_COLORS = ["#2563eb", "#079455", "#b54708", "#d92d20"];
   const WINDOW_COLORS = ["#7c3aed", "#c026d3", "#db2777", "#c2410c", "#0e7490", "#4338ca", "#047857", "#a16207"];
   const STORAGE = {
     solution: "lab-calculator.solution.draft.v2",
     hplc: "lab-calculator.hplc.draft.v2",
+    concentration: "lab-calculator.concentration.draft.v1",
     recent: "lab-calculator.recent-tool",
     mediaPrefs: "lab-calculator.media.preferences.v1",
   };
@@ -200,6 +201,7 @@
         <h3>溶液配制</h3><p>仅按体积比例计算，不引入密度、纯度、物质的量或体积收缩模型。</p>
         <h3>溶出介质</h3><p>生成结果必须结合现行药典、品种各论、注册标准与实验室 SOP 复核；机器解析条目会持续显示警告。</p>
         <h3>HPLC</h3><p>洗脱窗口和梯度调整属于初步实验建议，不是“最佳方法”或保留时间预测。应用前需通过混合标准品和实际系统验证。</p>
+        <h3>浓度与稀释</h3><p>仅提供理论计算和操作辅助。分子量、纯度和密度均以用户录入值为准，结果必须结合试剂标签、SDS、实验室 SOP 与适用温度复核。</p>
       `,
     });
   });
@@ -230,6 +232,7 @@
     {
       route: "solution",
       number: "01",
+      category: "VOLUME RECIPE",
       title: "溶液配制辅助",
       description: "拆解任意层级比例，计算所有最终组分的实际用量。",
       outputs: ["比例树", "叶子组分", "单位换算"],
@@ -237,6 +240,7 @@
     {
       route: "dissolution",
       number: "02",
+      category: "DISSOLUTION MEDIA",
       title: "溶出介质配制辅助",
       description: "按药典与介质筛选处方，并按目标体积生成用量与 SOP。",
       outputs: ["试剂用量", "SOP", "来源"],
@@ -244,9 +248,18 @@
     {
       route: "hplc",
       number: "03",
+      category: "HPLC GRADIENT",
       title: "HPLC梯度程序辅助",
       description: "录入梯度和目标物，估算流动相比例与潜在洗脱窗口。",
       outputs: ["梯度图", "比例", "优化建议"],
+    },
+    {
+      route: "concentration",
+      number: "04",
+      category: "CONCENTRATION & DILUTION",
+      title: "浓度与稀释配制辅助",
+      description: "计算固体称量、液体试剂取用和母液稀释，生成可复核的配制步骤。",
+      outputs: ["称量", "移取", "稀释"],
     },
   ];
 
@@ -269,7 +282,7 @@
         <div class="section-heading">
           <div>
             <h2>选择一个实验任务</h2>
-            <p>三个工具独立工作，状态和文件操作保持一致。</p>
+            <p>四个工具独立工作，状态和文件操作保持一致。</p>
           </div>
         </div>
         <section class="tool-grid" aria-label="实验室计算工具">
@@ -278,6 +291,7 @@
               (tool) => `
                 <article class="tool-card" tabindex="0" role="link" data-route="${tool.route}" aria-label="打开${tool.title}">
                   <span class="tool-number">${tool.number}</span>
+                  <span class="tool-category">${tool.category}</span>
                   <h2>${tool.title}</h2>
                   <p>${tool.description}</p>
                   <div class="tool-output">${tool.outputs.map((item) => `<span class="tag neutral">${item}</span>`).join("")}</div>
@@ -758,6 +772,588 @@
       renderSolution();
       toast(`已导入“${solution.name}”`);
     });
+  }
+
+  const CONCENTRATION_VOLUME_TO_L = { "µL": 0.000001, mL: 0.001, L: 1 };
+  const MOLAR_TO_MOL_L = { "mol/L": 1, "mmol/L": 0.001, "µmol/L": 0.000001 };
+  const MASS_TO_G_L = { "g/L": 1, "mg/mL": 1, "mg/L": 0.001, "µg/mL": 0.001, "% w/v": 10 };
+  const SOLID_CONCENTRATION_UNITS = [...Object.keys(MOLAR_TO_MOL_L), ...Object.keys(MASS_TO_G_L)];
+  const LIQUID_CONCENTRATION_UNITS = ["mol/L", "mmol/L", "g/L", "mg/mL", "% w/v"];
+  const CONCENTRATION_MODES = {
+    solid: "固体试剂配液",
+    liquid: "液体试剂配液",
+    dilution: "母液稀释",
+  };
+
+  const defaultConcentration = () => ({
+    mode: "solid",
+    name: "新配制方案",
+    substance: "",
+    targetConcentration: "",
+    targetUnit: "mol/L",
+    targetVolume: "",
+    volumeUnit: "mL",
+    molecularWeight: "",
+    purity: "100",
+    density: "",
+    stockConcentration: "",
+    stockUnit: "mol/L",
+    portions: "1",
+    extraPercent: "0",
+    notes: "",
+  });
+
+  let concentration = {
+    ...defaultConcentration(),
+    ...safeParse(localStorage.getItem(STORAGE.concentration), {}),
+    result: null,
+    errors: {},
+    stale: false,
+  };
+  if (!CONCENTRATION_MODES[concentration.mode]) concentration = { ...defaultConcentration(), result: null, errors: {}, stale: false };
+
+  const concentrationDimension = (unit) => {
+    if (Object.hasOwn(MOLAR_TO_MOL_L, unit)) return "molar";
+    if (Object.hasOwn(MASS_TO_G_L, unit)) return "mass";
+    return "";
+  };
+
+  const requiredNumber = (value, field, { positive = true, minimum = null, integer = false } = {}) => {
+    if (value === "" || value == null) throw { field, message: `请填写${field}` };
+    const number = Number(value);
+    if (!Number.isFinite(number)) throw { field, message: `${field}必须是有限数字` };
+    if (positive && number <= 0) throw { field, message: `${field}必须大于 0` };
+    if (minimum != null && number < minimum) throw { field, message: `${field}不能小于 ${minimum}` };
+    if (integer && !Number.isInteger(number)) throw { field, message: `${field}必须是大于 0 的整数` };
+    return number;
+  };
+
+  const requireText = (value, field) => {
+    if (!String(value || "").trim()) throw { field, message: `请填写${field}` };
+    return String(value).trim();
+  };
+
+  const purityFraction = () => {
+    const purity = requiredNumber(concentration.purity, "试剂纯度");
+    if (purity > 100) throw { field: "试剂纯度", message: "试剂纯度必须大于 0% 且不超过 100%" };
+    return purity / 100;
+  };
+
+  const volumeInLitres = () => {
+    const volume = requiredNumber(concentration.targetVolume, "目标体积");
+    const factor = CONCENTRATION_VOLUME_TO_L[concentration.volumeUnit];
+    if (!factor) throw { field: "体积单位", message: "请选择有效的体积单位" };
+    return volume * factor;
+  };
+
+  const ensureFiniteResult = (values) => {
+    if (values.some((value) => !Number.isFinite(value))) throw { field: "计算结果", message: "计算结果不是有限数字，请核对所有输入" };
+  };
+
+  const concentrationInBase = (value, unit) => {
+    const dimension = concentrationDimension(unit);
+    if (!dimension) throw { field: "浓度单位", message: "请选择有效的浓度单位" };
+    return value * (dimension === "molar" ? MOLAR_TO_MOL_L[unit] : MASS_TO_G_L[unit]);
+  };
+
+  const formatMass = (grams) => {
+    if (grams >= 1000) return `${numberText(grams / 1000)} kg`;
+    if (grams >= 1) return `${numberText(grams)} g`;
+    if (grams >= 0.001) return `${numberText(grams * 1000)} mg`;
+    return `${numberText(grams * 1_000_000)} µg`;
+  };
+
+  const formatVolumeL = (litres) => {
+    if (litres >= 1) return `${numberText(litres)} L`;
+    if (litres >= 0.001) return `${numberText(litres * 1000)} mL`;
+    return `${numberText(litres * 1_000_000)} µL`;
+  };
+
+  const calculateSolidConcentration = () => {
+    const target = requiredNumber(concentration.targetConcentration, "目标浓度");
+    const volumeL = volumeInLitres();
+    const purity = purityFraction();
+    const dimension = concentrationDimension(concentration.targetUnit);
+    if (!dimension) throw { field: "浓度单位", message: "请选择有效的浓度单位" };
+    let amountMol = null;
+    let pureMassG;
+    const formulas = [
+      `体积换算：${numberText(Number(concentration.targetVolume))} ${concentration.volumeUnit} = ${numberText(volumeL)} L`,
+    ];
+    if (dimension === "molar") {
+      const molecularWeight = requiredNumber(concentration.molecularWeight, "分子量");
+      const molL = concentrationInBase(target, concentration.targetUnit);
+      amountMol = molL * volumeL;
+      pureMassG = amountMol * molecularWeight;
+      formulas.push(
+        `浓度换算：${numberText(target)} ${concentration.targetUnit} = ${numberText(molL)} mol/L`,
+        `n = C × V = ${numberText(molL)} mol/L × ${numberText(volumeL)} L = ${numberText(amountMol)} mol`,
+        `m纯品 = n × M = ${numberText(amountMol)} mol × ${numberText(molecularWeight)} g/mol = ${numberText(pureMassG)} g`,
+      );
+    } else {
+      const gL = concentrationInBase(target, concentration.targetUnit);
+      pureMassG = gL * volumeL;
+      formulas.push(
+        `质量浓度换算：${numberText(target)} ${concentration.targetUnit} = ${numberText(gL)} g/L`,
+        `m纯品 = C × V = ${numberText(gL)} g/L × ${numberText(volumeL)} L = ${numberText(pureMassG)} g`,
+      );
+    }
+    const actualMassG = pureMassG / purity;
+    formulas.push(
+      `纯度小数 = ${numberText(Number(concentration.purity))}% ÷ 100 = ${numberText(purity)}`,
+      `m实际称量 = m纯品 ÷ 纯度小数 = ${numberText(pureMassG)} g ÷ ${numberText(purity)} = ${numberText(actualMassG)} g`,
+    );
+    ensureFiniteResult([pureMassG, actualMassG, ...(amountMol == null ? [] : [amountMol])]);
+    const warnings = ["请核对纯度和分子量是否对应试剂的实际盐型、水合物或溶剂化物。"];
+    if (actualMassG < 0.01) warnings.push("称量量小于 10 mg，建议核对天平能力或考虑配制中间液。");
+    return {
+      mode: "solid",
+      calculatedAt: new Date().toISOString(),
+      metrics: [
+        ["实际称量量", formatMass(actualMassG)],
+        ["纯品理论量", formatMass(pureMassG)],
+        ...(amountMol == null ? [] : [["物质的量", `${numberText(amountMol)} mol`]]),
+        ["纯度修正系数", numberText(1 / purity)],
+      ],
+      formulas,
+      steps: [
+        `称取 ${formatMass(actualMassG)} 的${concentration.substance.trim()}。`,
+        `加入约目标体积 60%～80% 的适用溶剂溶解。`,
+        `完全溶解并恢复至适用温度后，用溶剂定容至 ${numberText(Number(concentration.targetVolume))} ${concentration.volumeUnit}。`,
+        "混匀并按实验室要求记录。",
+      ],
+      warnings,
+    };
+  };
+
+  const calculateLiquidConcentration = () => {
+    const target = requiredNumber(concentration.targetConcentration, "目标浓度");
+    const volumeL = volumeInLitres();
+    const purity = purityFraction();
+    const density = requiredNumber(concentration.density, "试剂密度");
+    const dimension = concentrationDimension(concentration.targetUnit);
+    if (!dimension || !LIQUID_CONCENTRATION_UNITS.includes(concentration.targetUnit)) {
+      throw { field: "浓度单位", message: "请选择液体试剂模式支持的浓度单位" };
+    }
+    let amountMol = null;
+    let pureMassG;
+    const formulas = [`体积换算：${numberText(Number(concentration.targetVolume))} ${concentration.volumeUnit} = ${numberText(volumeL)} L`];
+    if (dimension === "molar") {
+      const molecularWeight = requiredNumber(concentration.molecularWeight, "分子量");
+      const molL = concentrationInBase(target, concentration.targetUnit);
+      amountMol = molL * volumeL;
+      pureMassG = amountMol * molecularWeight;
+      formulas.push(
+        `浓度换算：${numberText(target)} ${concentration.targetUnit} = ${numberText(molL)} mol/L`,
+        `m纯品 = C × V × M = ${numberText(molL)} mol/L × ${numberText(volumeL)} L × ${numberText(molecularWeight)} g/mol = ${numberText(pureMassG)} g`,
+      );
+    } else {
+      const gL = concentrationInBase(target, concentration.targetUnit);
+      pureMassG = gL * volumeL;
+      formulas.push(
+        `质量浓度换算：${numberText(target)} ${concentration.targetUnit} = ${numberText(gL)} g/L`,
+        `m纯品 = 质量浓度 × V = ${numberText(gL)} g/L × ${numberText(volumeL)} L = ${numberText(pureMassG)} g`,
+      );
+    }
+    const reagentMassG = pureMassG / purity;
+    const reagentVolumeMl = reagentMassG / density;
+    formulas.push(
+      `m试剂溶液 = m纯品 ÷ 纯度小数 = ${numberText(pureMassG)} g ÷ ${numberText(purity)} = ${numberText(reagentMassG)} g`,
+      `V试剂溶液 = m试剂溶液 ÷ 密度 = ${numberText(reagentMassG)} g ÷ ${numberText(density)} g/mL = ${numberText(reagentVolumeMl)} mL`,
+    );
+    ensureFiniteResult([pureMassG, reagentMassG, reagentVolumeMl, ...(amountMol == null ? [] : [amountMol])]);
+    const warnings = [
+      "密度必须与试剂标签、纯度和适用温度相匹配；系统不自动推断密度。",
+      "涉及腐蚀性或放热性试剂时，应遵循试剂SDS和实验室SOP，并根据具体试剂确定加料顺序。",
+    ];
+    if (reagentVolumeMl < 0.01) warnings.push("移取体积小于 10 µL，建议核对移液设备能力或考虑配制中间液。");
+    return {
+      mode: "liquid",
+      calculatedAt: new Date().toISOString(),
+      metrics: [
+        ["浓试剂移取体积", formatVolumeL(reagentVolumeMl / 1000)],
+        ["试剂溶液质量", formatMass(reagentMassG)],
+        ["所含纯品质量", formatMass(pureMassG)],
+        ...(amountMol == null ? [] : [["物质的量", `${numberText(amountMol)} mol`]]),
+      ],
+      formulas,
+      steps: [
+        `按试剂标签、纯度和适用温度复核密度 ${numberText(density)} g/mL。`,
+        `量取 ${formatVolumeL(reagentVolumeMl / 1000)} 的${concentration.substance.trim()}。`,
+        `按该试剂 SDS 和实验室 SOP 确定加料顺序，转移后用适用溶剂稀释并定容至 ${numberText(Number(concentration.targetVolume))} ${concentration.volumeUnit}。`,
+        "混匀并按实验室要求记录。",
+      ],
+      warnings,
+    };
+  };
+
+  const calculateDilution = () => {
+    const stock = requiredNumber(concentration.stockConcentration, "母液浓度");
+    const target = requiredNumber(concentration.targetConcentration, "目标浓度");
+    const volumeL = volumeInLitres();
+    const portions = requiredNumber(concentration.portions, "配制份数", { integer: true });
+    const extra = requiredNumber(concentration.extraPercent, "额外余量", { positive: false, minimum: 0 });
+    const stockDimension = concentrationDimension(concentration.stockUnit);
+    const targetDimension = concentrationDimension(concentration.targetUnit);
+    if (!stockDimension || stockDimension !== targetDimension) {
+      throw { field: "浓度单位", message: "母液与目标浓度的单位维度不兼容，请选择同一浓度维度" };
+    }
+    const stockBase = concentrationInBase(stock, concentration.stockUnit);
+    const targetBase = concentrationInBase(target, concentration.targetUnit);
+    if (stockBase <= targetBase) throw { field: "母液浓度", message: "母液浓度必须高于目标浓度" };
+    const stockVolumeL = targetBase * volumeL / stockBase;
+    if (stockVolumeL >= volumeL) throw { field: "母液移取量", message: "母液移取量必须小于目标终体积" };
+    const solventDifferenceL = volumeL - stockVolumeL;
+    const totalStockL = stockVolumeL * portions;
+    const totalFinalL = volumeL * portions;
+    const multiplier = portions * (1 + extra / 100);
+    const plannedStockL = stockVolumeL * multiplier;
+    const plannedFinalL = volumeL * multiplier;
+    const plannedSolventDifferenceL = plannedFinalL - plannedStockL;
+    ensureFiniteResult([stockVolumeL, solventDifferenceL, totalStockL, totalFinalL, plannedStockL, plannedFinalL]);
+    const warnings = ["理论溶剂差值仅用于复核；混合可能发生体积变化，实际操作应稀释并定容至目标体积。"];
+    if (stockVolumeL < 0.00001) warnings.push("移取体积小于 10 µL，建议核对移液设备能力或考虑配制中间液。");
+    if (stockVolumeL / volumeL >= 0.9) warnings.push("母液移取体积非常接近目标终体积，请核对浓度与设备量程。");
+    return {
+      mode: "dilution",
+      calculatedAt: new Date().toISOString(),
+      metrics: [
+        ["单份母液移取量", formatVolumeL(stockVolumeL)],
+        ["单份目标终体积", formatVolumeL(volumeL)],
+        ["全部份数母液合计", formatVolumeL(totalStockL)],
+        ["加余量后计划母液量", formatVolumeL(plannedStockL)],
+        ["加余量后计划终体积", formatVolumeL(plannedFinalL)],
+        ["单份理论溶剂差值", formatVolumeL(solventDifferenceL)],
+        ["计划理论溶剂差值", formatVolumeL(plannedSolventDifferenceL)],
+      ],
+      formulas: [
+        `浓度基准换算：C1 = ${numberText(stockBase)} ${stockDimension === "molar" ? "mol/L" : "g/L"}；C2 = ${numberText(targetBase)} ${stockDimension === "molar" ? "mol/L" : "g/L"}`,
+        `单份 V1 = C2 × V2 ÷ C1 = ${numberText(targetBase)} × ${numberText(volumeL)} L ÷ ${numberText(stockBase)} = ${numberText(stockVolumeL)} L`,
+        `单份理论溶剂差值 = V2 - V1 = ${numberText(volumeL)} L - ${numberText(stockVolumeL)} L = ${numberText(solventDifferenceL)} L`,
+        `计划倍数 = ${portions} 份 × (1 + ${numberText(extra)}% ÷ 100) = ${numberText(multiplier)}`,
+        `计划母液体积 = ${numberText(stockVolumeL)} L × ${numberText(multiplier)} = ${numberText(plannedStockL)} L`,
+        `计划终体积 = ${numberText(volumeL)} L × ${numberText(multiplier)} = ${numberText(plannedFinalL)} L`,
+      ],
+      steps: [
+        `单份量取 ${formatVolumeL(stockVolumeL)} 的${concentration.substance.trim()}；共 ${portions} 份。`,
+        `如按 ${numberText(extra)}% 余量统一准备，计划量取母液 ${formatVolumeL(plannedStockL)}。`,
+        `加入部分适用溶剂混匀，再用溶剂稀释并定容至${portions === 1 ? `目标体积 ${formatVolumeL(volumeL)}` : `每份目标体积 ${formatVolumeL(volumeL)}`}。`,
+        "混匀并按实验室要求记录；不要把理论溶剂差值当作实际精确加入量。",
+      ],
+      warnings,
+    };
+  };
+
+  const concentrationDraft = () => {
+    const data = { ...concentration };
+    delete data.result;
+    delete data.errors;
+    delete data.stale;
+    return data;
+  };
+
+  const fieldError = (field) => concentration.errors[field] ? `<span class="field-error">${e(concentration.errors[field])}</span>` : "";
+  const invalid = (field) => concentration.errors[field] ? 'aria-invalid="true"' : "";
+  const optionList = (units, selected) => units.map((unit) => `<option value="${unit}" ${unit === selected ? "selected" : ""}>${unit}</option>`).join("");
+
+  const concentrationFieldsHtml = () => {
+    const molecularRequired = concentrationDimension(concentration.targetUnit) === "molar";
+    if (concentration.mode === "dilution") {
+      return `
+        <div class="concentration-fields">
+          <div class="field"><label for="stock-concentration">母液浓度 C1 <span class="required">*</span></label><div class="input-group"><input id="stock-concentration" type="number" min="0" step="any" inputmode="decimal" value="${e(concentration.stockConcentration)}" data-concentration-field="stockConcentration" data-error-field="母液浓度" ${invalid("母液浓度")}><select aria-label="母液浓度单位" data-concentration-field="stockUnit">${optionList(SOLID_CONCENTRATION_UNITS, concentration.stockUnit)}</select></div>${fieldError("母液浓度")}</div>
+          <div class="field"><label for="target-concentration">目标浓度 C2 <span class="required">*</span></label><div class="input-group"><input id="target-concentration" type="number" min="0" step="any" inputmode="decimal" value="${e(concentration.targetConcentration)}" data-concentration-field="targetConcentration" data-error-field="目标浓度" ${invalid("目标浓度")}><select aria-label="目标浓度单位" data-concentration-field="targetUnit">${optionList(SOLID_CONCENTRATION_UNITS, concentration.targetUnit)}</select></div>${fieldError("目标浓度")}${fieldError("浓度单位")}</div>
+          <div class="field"><label for="target-volume">单份目标终体积 V2 <span class="required">*</span></label><div class="input-group"><input id="target-volume" type="number" min="0" step="any" inputmode="decimal" value="${e(concentration.targetVolume)}" data-concentration-field="targetVolume" data-error-field="目标体积" ${invalid("目标体积")}><select aria-label="体积单位" data-concentration-field="volumeUnit">${optionList(Object.keys(CONCENTRATION_VOLUME_TO_L), concentration.volumeUnit)}</select></div>${fieldError("目标体积")}</div>
+          <div class="field"><label for="portions">配制份数 <span class="required">*</span></label><input id="portions" type="number" min="1" step="1" inputmode="numeric" value="${e(concentration.portions)}" data-concentration-field="portions" data-error-field="配制份数" ${invalid("配制份数")}>${fieldError("配制份数")}</div>
+          <div class="field"><label for="extra-percent">额外余量</label><div class="input-group"><input id="extra-percent" type="number" min="0" step="any" inputmode="decimal" value="${e(concentration.extraPercent)}" data-concentration-field="extraPercent" data-error-field="额外余量" ${invalid("额外余量")}><span class="input-suffix">%</span></div>${fieldError("额外余量")}</div>
+        </div>
+      `;
+    }
+    const units = concentration.mode === "liquid" ? LIQUID_CONCENTRATION_UNITS : SOLID_CONCENTRATION_UNITS;
+    return `
+      <div class="concentration-fields">
+        <div class="field"><label for="target-concentration">目标浓度 <span class="required">*</span></label><div class="input-group"><input id="target-concentration" type="number" min="0" step="any" inputmode="decimal" value="${e(concentration.targetConcentration)}" data-concentration-field="targetConcentration" data-error-field="目标浓度" ${invalid("目标浓度")}><select aria-label="目标浓度单位" data-concentration-field="targetUnit">${optionList(units, concentration.targetUnit)}</select></div>${fieldError("目标浓度")}${fieldError("浓度单位")}</div>
+        <div class="field"><label for="target-volume">目标体积 <span class="required">*</span></label><div class="input-group"><input id="target-volume" type="number" min="0" step="any" inputmode="decimal" value="${e(concentration.targetVolume)}" data-concentration-field="targetVolume" data-error-field="目标体积" ${invalid("目标体积")}><select aria-label="体积单位" data-concentration-field="volumeUnit">${optionList(Object.keys(CONCENTRATION_VOLUME_TO_L), concentration.volumeUnit)}</select></div>${fieldError("目标体积")}</div>
+        <div class="field"><label for="molecular-weight">分子量 ${molecularRequired ? '<span class="required">*</span>' : ""}</label><div class="input-group"><input id="molecular-weight" type="number" min="0" step="any" inputmode="decimal" value="${e(concentration.molecularWeight)}" data-concentration-field="molecularWeight" data-error-field="分子量" ${invalid("分子量")}><span class="input-suffix">g/mol</span></div><span class="field-help">${molecularRequired ? "摩尔浓度计算必填；请按实际盐型或水合物填写。" : "质量浓度计算不使用分子量。"}</span>${fieldError("分子量")}</div>
+        <div class="field"><label for="purity">试剂纯度 <span class="required">*</span></label><div class="input-group"><input id="purity" type="number" min="0" max="100" step="any" inputmode="decimal" value="${e(concentration.purity)}" data-concentration-field="purity" data-error-field="试剂纯度" ${invalid("试剂纯度")}><span class="input-suffix">${concentration.mode === "liquid" ? "% w/w" : "%"}</span></div>${fieldError("试剂纯度")}</div>
+        ${concentration.mode === "liquid" ? `<div class="field"><label for="density">试剂密度 <span class="required">*</span></label><div class="input-group"><input id="density" type="number" min="0" step="any" inputmode="decimal" value="${e(concentration.density)}" data-concentration-field="density" data-error-field="试剂密度" ${invalid("试剂密度")}><span class="input-suffix">g/mL</span></div><span class="field-help">必须与试剂标签、纯度和适用温度匹配，系统不自动推断。</span>${fieldError("试剂密度")}</div>` : ""}
+      </div>
+    `;
+  };
+
+  const concentrationInputSummary = () => {
+    const items = [
+      `方案名称：${concentration.name}`,
+      `${concentration.mode === "dilution" ? "物质或母液名称" : "试剂名称"}：${concentration.substance}`,
+    ];
+    if (concentration.mode === "dilution") {
+      items.push(
+        `母液浓度 C1：${concentration.stockConcentration} ${concentration.stockUnit}`,
+        `目标浓度 C2：${concentration.targetConcentration} ${concentration.targetUnit}`,
+        `单份目标终体积：${concentration.targetVolume} ${concentration.volumeUnit}`,
+        `配制份数：${concentration.portions}`,
+        `额外余量：${concentration.extraPercent}%`,
+      );
+    } else {
+      items.push(
+        `目标浓度：${concentration.targetConcentration} ${concentration.targetUnit}`,
+        `目标体积：${concentration.targetVolume} ${concentration.volumeUnit}`,
+        `分子量：${concentration.molecularWeight || "不适用"}${concentration.molecularWeight ? " g/mol" : ""}`,
+        `试剂纯度：${concentration.purity}%${concentration.mode === "liquid" ? " w/w" : ""}`,
+      );
+      if (concentration.mode === "liquid") items.push(`试剂密度：${concentration.density} g/mL`);
+    }
+    items.push(`备注：${concentration.notes.trim() || "无"}`);
+    return items;
+  };
+
+  const concentrationResultsHtml = () => {
+    if (!concentration.result) {
+      const text = concentration.stale ? "输入已修改 · 待重新计算" : "填写左侧参数后生成称量、移取或稀释方案。";
+      return `<div class="empty-state ${concentration.stale ? "stale-result" : ""}"><div><strong>${concentration.stale ? "结果已过期" : "尚未计算"}</strong>${text}</div></div>`;
+    }
+    const result = concentration.result;
+    return `
+      <div class="result-meta"><span class="tag success">结果有效</span><span>计算时间：${new Date(result.calculatedAt).toLocaleString("zh-CN")}</span></div>
+      <div class="metric-grid">${result.metrics.map(([label, value]) => `<div class="metric"><small>${e(label)}</small><strong>${e(value)}</strong></div>`).join("")}</div>
+      <section class="result-section"><h3>输入摘要</h3><ul>${concentrationInputSummary().map((item) => `<li>${e(item)}</li>`).join("")}</ul></section>
+      <section class="result-section"><h3>计算依据与数值代入</h3><ol class="formula-list">${result.formulas.map((formula) => `<li>${e(formula)}</li>`).join("")}</ol></section>
+      <section class="result-section"><h3>建议配制步骤</h3><ol>${result.steps.map((step) => `<li>${e(step)}</li>`).join("")}</ol></section>
+      <section class="result-section"><h3>风险和核对事项</h3>${result.warnings.map((warning) => `<div class="alert warning">${e(warning)}</div>`).join("")}<div class="alert info">本功能只提供理论计算和操作辅助，不代替实验室SOP、药典、注册标准、试剂标签或经批准的方法。</div></section>
+      <div class="button-row result-actions">
+        <button class="button secondary" type="button" data-action="copy-concentration">复制完整配制方案</button>
+        <button class="button secondary" type="button" data-action="print-concentration">打印配制方案</button>
+      </div>
+    `;
+  };
+
+  function renderConcentration() {
+    localStorage.setItem(STORAGE.recent, "concentration");
+    const valid = Boolean(concentration.result);
+    setShell({
+      title: "浓度与稀释配制辅助",
+      save: "数据保存在当前浏览器",
+      saveKind: "neutral",
+      result: valid ? "计算结果有效" : concentration.stale ? "输入已修改 · 待重新计算" : Object.keys(concentration.errors).length ? "存在输入错误" : "尚无计算结果",
+      resultKind: valid ? "success" : concentration.stale ? "warning" : Object.keys(concentration.errors).length ? "danger" : "neutral",
+      context: concentration.name || "未命名方案",
+      menu: [
+        { label: "导入方案", action: importConcentration },
+        { label: "下载方案 JSON", action: exportConcentration },
+        { label: "打印配制方案", action: printConcentration },
+      ],
+    });
+    setMobileAction('<button class="button primary" type="button" data-mobile-action="calculate-concentration">计算并生成配制方案</button>', (event) => {
+      if (event.target.closest('[data-mobile-action="calculate-concentration"]')) runConcentrationCalculation();
+    });
+    app.innerHTML = `
+      <div class="page tool-page concentration-page">
+        <div class="page-heading">
+          <div><p class="eyebrow">CONCENTRATION & DILUTION</p><h1>浓度与稀释配制辅助</h1><p>根据目标浓度、体积和试剂信息，计算称量量、浓试剂取用量或母液稀释量。</p></div>
+          <div class="button-row">
+            <button class="button secondary" type="button" data-action="import-concentration">导入方案</button>
+            <button class="button secondary" type="button" data-action="export-concentration">下载方案 JSON</button>
+          </div>
+        </div>
+        <div class="alert warning"><strong>科学性边界</strong><p>系统不会猜测分子量、密度、纯度或危险性。所有结果必须结合试剂标签、SDS、实验室 SOP、药典、注册标准或已批准方法复核。</p></div>
+        <section class="card">
+          <div class="card-heading"><div><h2>选择计算模式</h2><p>三种模式互斥；切换模式会保留已填写的通用字段，并要求重新计算。</p></div></div>
+          <div class="segmented concentration-mode" role="group" aria-label="计算模式">
+            ${Object.entries(CONCENTRATION_MODES).map(([mode, label]) => `<button type="button" data-concentration-mode="${mode}" aria-pressed="${String(concentration.mode === mode)}">${label}</button>`).join("")}
+          </div>
+        </section>
+        <div class="workspace-grid concentration-workspace">
+          <section class="card" aria-labelledby="concentration-input-title">
+            <div class="card-heading"><div><h2 id="concentration-input-title">主要输入</h2><p>带 <span class="required">*</span> 的字段必须填写；不会在输入过程中反复弹窗。</p></div></div>
+            <div class="two-column-fields concentration-common-fields">
+              <div class="field"><label for="concentration-name">方案名称 <span class="required">*</span></label><input id="concentration-name" value="${e(concentration.name)}" data-concentration-field="name" data-error-field="方案名称" ${invalid("方案名称")}>${fieldError("方案名称")}</div>
+              <div class="field"><label for="concentration-substance">${concentration.mode === "dilution" ? "物质或母液名称" : "试剂名称"} <span class="required">*</span></label><input id="concentration-substance" value="${e(concentration.substance)}" data-concentration-field="substance" data-error-field="物质名称" ${invalid("物质名称")}>${fieldError("物质名称")}</div>
+            </div>
+            ${concentrationFieldsHtml()}
+            <div class="field concentration-notes"><label for="concentration-notes">备注</label><textarea id="concentration-notes" rows="3" data-concentration-field="notes">${e(concentration.notes)}</textarea></div>
+            ${Object.entries(concentration.errors).filter(([field]) => !["方案名称", "物质名称", "目标浓度", "目标体积", "分子量", "试剂纯度", "试剂密度", "母液浓度", "配制份数", "额外余量", "浓度单位"].includes(field)).map(([, message]) => `<div class="alert danger">${e(message)}</div>`).join("")}
+            <div class="button-row desktop-only concentration-primary"><button class="button primary" type="button" data-action="calculate-concentration">计算并生成配制方案</button></div>
+          </section>
+          <aside class="card sticky-panel" aria-labelledby="concentration-result-title">
+            <div class="card-heading"><div><h2 id="concentration-result-title">结果与配制方案</h2><p>${valid ? "结果包含完整公式、步骤和风险核对。" : "输入修改后必须重新计算，过期结果不能复制或打印。"}</p></div></div>
+            <div id="concentration-results">${concentrationResultsHtml()}</div>
+          </aside>
+        </div>
+        <section class="card concentration-storage">
+          <div class="card-heading"><div><h2>保存与导出</h2><p>数据保存在当前浏览器。重要方案请下载 <code>.labconcentration.json</code> 文件留存。</p></div></div>
+          <div class="button-row">
+            <button class="button secondary" type="button" data-action="export-concentration">下载方案 JSON</button>
+            <button class="button secondary" type="button" data-action="import-concentration">导入方案文件</button>
+            <button class="button secondary" type="button" data-action="copy-concentration" ${valid ? "" : "disabled"}>复制完整配制方案</button>
+            <button class="button secondary" type="button" data-action="print-concentration" ${valid ? "" : "disabled"}>打印配制方案</button>
+          </div>
+        </section>
+      </div>
+    `;
+    app.oninput = handleConcentrationInput;
+    app.onchange = handleConcentrationChange;
+    app.onclick = handleConcentrationClick;
+  }
+
+  function markConcentrationDirty(field = "") {
+    if (field) delete concentration.errors[field];
+    const hadResult = Boolean(concentration.result);
+    concentration.result = null;
+    concentration.stale ||= hadResult;
+    setBadge(resultStatus, concentration.stale ? "输入已修改 · 待重新计算" : "尚无计算结果", concentration.stale ? "warning" : "neutral");
+    scheduleSave("concentration", concentrationDraft());
+    const results = app.querySelector("#concentration-results");
+    if (results) results.innerHTML = concentrationResultsHtml();
+    app.querySelectorAll('[data-action="copy-concentration"], [data-action="print-concentration"]').forEach((button) => {
+      button.disabled = true;
+    });
+  }
+
+  function handleConcentrationInput(event) {
+    const key = event.target.dataset.concentrationField;
+    if (!key) return;
+    concentration[key] = event.target.value;
+    const errorField = event.target.dataset.errorField;
+    if (errorField) {
+      delete concentration.errors[errorField];
+      event.target.removeAttribute("aria-invalid");
+      event.target.parentElement.parentElement.querySelector(".field-error")?.remove();
+    }
+    markConcentrationDirty();
+  }
+
+  function handleConcentrationChange(event) {
+    const key = event.target.dataset.concentrationField;
+    if (!key || event.target.tagName !== "SELECT") return;
+    concentration[key] = event.target.value;
+    if (key === "targetUnit" && concentration.mode === "liquid" && !LIQUID_CONCENTRATION_UNITS.includes(concentration.targetUnit)) {
+      concentration.targetUnit = "mol/L";
+    }
+    markConcentrationDirty("浓度单位");
+    renderConcentration();
+  }
+
+  function handleConcentrationClick(event) {
+    const modeButton = event.target.closest("[data-concentration-mode]");
+    if (modeButton) {
+      concentration.mode = modeButton.dataset.concentrationMode;
+      if (concentration.mode === "liquid" && !LIQUID_CONCENTRATION_UNITS.includes(concentration.targetUnit)) concentration.targetUnit = "mol/L";
+      concentration.errors = {};
+      markConcentrationDirty();
+      renderConcentration();
+      return;
+    }
+    const action = event.target.closest("[data-action]")?.dataset.action;
+    if (action === "calculate-concentration") runConcentrationCalculation();
+    if (action === "export-concentration") exportConcentration();
+    if (action === "import-concentration") importConcentration();
+    if (action === "copy-concentration") copyConcentration();
+    if (action === "print-concentration") printConcentration();
+  }
+
+  function runConcentrationCalculation() {
+    concentration.errors = {};
+    try {
+      requireText(concentration.name, "方案名称");
+      requireText(concentration.substance, "物质名称");
+      if (concentration.mode === "solid") concentration.result = calculateSolidConcentration();
+      else if (concentration.mode === "liquid") concentration.result = calculateLiquidConcentration();
+      else concentration.result = calculateDilution();
+      concentration.stale = false;
+      localStorage.setItem(STORAGE.concentration, JSON.stringify(concentrationDraft()));
+      renderConcentration();
+      setBadge(resultStatus, "计算结果有效", "success");
+      toast("已生成可复核的配制方案");
+      if (matchMedia("(max-width: 900px)").matches) app.querySelector("#concentration-result-title")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (error) {
+      const field = error?.field || "计算结果";
+      concentration.errors[field] = error?.message || "计算失败，请核对输入";
+      concentration.result = null;
+      renderConcentration();
+      setBadge(resultStatus, "存在输入错误", "danger");
+      const target = app.querySelector(`[data-error-field="${CSS.escape(field)}"]`) || app.querySelector('[aria-invalid="true"]');
+      target?.focus();
+    }
+  }
+
+  const concentrationPlanText = () => {
+    if (!concentration.result) return "";
+    const result = concentration.result;
+    return [
+      "实验室计算器｜浓度与稀释配制方案",
+      `方案名称：${concentration.name}`,
+      `计算模式：${CONCENTRATION_MODES[concentration.mode]}`,
+      "",
+      "输入参数",
+      ...concentrationInputSummary(),
+      "",
+      "计算结果",
+      ...result.metrics.map(([label, value]) => `${label}：${value}`),
+      "",
+      "公式和换算过程",
+      ...result.formulas.map((formula, index) => `${index + 1}. ${formula}`),
+      "",
+      "建议配制步骤",
+      ...result.steps.map((step, index) => `${index + 1}. ${step}`),
+      "",
+      "警告与科学性边界",
+      ...result.warnings.map((warning) => `- ${warning}`),
+      "- 本功能只提供理论计算和操作辅助，不代替实验室SOP、药典、注册标准、试剂标签或经批准的方法。",
+      "",
+      `计算时间：${new Date(result.calculatedAt).toLocaleString("zh-CN")}`,
+    ].join("\n");
+  };
+
+  function exportConcentration() {
+    const payload = {
+      format: "lab-calculator-concentration",
+      version: 1,
+      savedAt: new Date().toISOString(),
+      data: concentrationDraft(),
+    };
+    const safeName = (concentration.name.trim() || "浓度配制方案").replace(/[\\/:*?"<>|]/g, "_");
+    download(`${safeName}.labconcentration.json`, JSON.stringify(payload, null, 2));
+    toast("已下载浓度配制方案文件");
+  }
+
+  function importConcentration() {
+    openFile(async (text, filename) => {
+      const payload = JSON.parse(text);
+      if (payload?.format !== "lab-calculator-concentration") throw new Error("方案文件 format 不正确");
+      if (payload?.version !== 1) throw new Error("仅支持 version 为 1 的浓度配制方案");
+      const data = payload?.data;
+      if (!data || !CONCENTRATION_MODES[data.mode]) throw new Error("方案文件缺少有效的计算模式");
+      const requiredKeys = data.mode === "dilution"
+        ? ["name", "substance", "stockConcentration", "targetConcentration", "stockUnit", "targetUnit", "targetVolume", "volumeUnit"]
+        : ["name", "substance", "targetConcentration", "targetUnit", "targetVolume", "volumeUnit", "purity"];
+      if (requiredKeys.some((key) => !Object.hasOwn(data, key))) throw new Error("方案文件缺少关键输入字段");
+      const accepted = await confirmAction({
+        title: "导入浓度配制方案？",
+        body: `<p>文件：<strong>${e(filename)}</strong></p><p>导入后会替换当前草稿，文件内任何已有计算结果都不会被信任，必须重新计算。</p>`,
+        confirmText: "导入并替换",
+      });
+      if (!accepted) return;
+      concentration = { ...defaultConcentration(), ...data, result: null, errors: {}, stale: true };
+      localStorage.setItem(STORAGE.concentration, JSON.stringify(concentrationDraft()));
+      renderConcentration();
+      toast("方案已导入，请重新计算");
+    });
+  }
+
+  function copyConcentration() {
+    if (!concentration.result) {
+      toast("输入已修改，请重新计算后再复制", { kind: "warning" });
+      return;
+    }
+    navigator.clipboard.writeText(concentrationPlanText()).then(() => toast("已复制完整配制方案"));
+  }
+
+  function printConcentration() {
+    if (!concentration.result) {
+      toast("输入已修改，请重新计算后再打印", { kind: "warning" });
+      return;
+    }
+    window.print();
   }
 
   const defaultMediaState = () => {
@@ -2124,6 +2720,7 @@
       await loadMediaCatalog();
       renderDissolution();
     } else if (path === "hplc") renderHplc();
+    else if (path === "concentration") renderConcentration();
     else renderHome();
     focusMain();
   }

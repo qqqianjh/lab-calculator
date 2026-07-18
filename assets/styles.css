@@ -466,6 +466,15 @@ main {
   font-weight: 800;
 }
 
+.tool-category {
+  display: block;
+  margin: -10px 0 6px;
+  color: var(--blue-700);
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+}
+
 .tool-card h2 {
   margin-bottom: 10px;
   font-size: 21px;
@@ -730,6 +739,86 @@ button:disabled {
 
 .workspace-grid.media-workspace {
   grid-template-columns: minmax(300px, 0.85fr) minmax(0, 1.3fr);
+}
+
+.workspace-grid.concentration-workspace {
+  grid-template-columns: minmax(0, 0.95fr) minmax(360px, 1.05fr);
+}
+
+.concentration-mode {
+  max-width: 720px;
+}
+
+.concentration-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.concentration-notes,
+.concentration-primary {
+  margin-top: 18px;
+}
+
+.concentration-primary {
+  justify-content: flex-end;
+}
+
+.result-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.result-section {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.result-section h3 {
+  margin-bottom: 10px;
+  font-size: 17px;
+}
+
+.result-section ol,
+.result-section ul {
+  margin: 0;
+  padding-left: 22px;
+}
+
+.result-section li + li {
+  margin-top: 7px;
+}
+
+.formula-list {
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+.result-actions {
+  margin-top: 20px;
+}
+
+.stale-result {
+  border-color: #f2c58b;
+  background: var(--amber-50);
+}
+
+.concentration-storage {
+  margin-top: 18px;
 }
 
 .sticky-panel {
@@ -1543,7 +1632,8 @@ tr:last-child td {
   }
 
   .workspace-grid,
-  .workspace-grid.media-workspace {
+  .workspace-grid.media-workspace,
+  .workspace-grid.concentration-workspace {
     grid-template-columns: 1fr;
   }
 
@@ -1640,7 +1730,9 @@ tr:last-child td {
   .selector-grid .wide,
   .phase-grid,
   .two-column-fields,
-  .export-grid {
+  .export-grid,
+  .concentration-fields,
+  .metric-grid {
     grid-template-columns: 1fr;
     grid-column: auto;
   }
@@ -1784,6 +1876,11 @@ tr:last-child td {
   .card-heading > .button,
   .card-heading > .tabs {
     margin-top: 10px;
+  }
+
+  .concentration-mode {
+    display: grid;
+    grid-template-columns: 1fr;
   }
 }
 
